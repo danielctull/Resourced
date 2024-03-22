@@ -11,26 +11,8 @@ public struct Resource<Value> {
 
     public typealias Response = (data: Data, response: URLResponse)
 
-    /// A request used to fetch the data.
-    @available(*, deprecated, message: "Use makeRequest() instead.")
-    public var request: URLRequest { return try! makeRequest() }
-
-    /// Makes the request for the resource.
-    public let makeRequest: () throws -> URLRequest
-
-    /// Transforms the network response into the desired value.
-    public let transform: (Response) throws -> Value
-
-    /// Creates a resource located with the request and transformed from data
-    /// using the given transform.
-    ///
-    /// - Parameters:
-    ///   - request: A request for this resource.
-    ///   - transform: Used to transform the response into the desired value.
-    public init(request: URLRequest,
-                transform: @escaping (Response) throws -> Value) {
-        self.init(makeRequest: { request }, transform: transform)
-    }
+    private let _request: () throws -> URLRequest
+    private let _success: (Response) throws -> Value
 
     /// Creates a resource located with the request and transformed from data
     /// using the given transform.
@@ -40,12 +22,43 @@ public struct Resource<Value> {
     /// publisher methods on URLSession.
     ///
     /// - Parameters:
-    ///   - makeRequest: Used to create a request for this resource.
-    ///   - transform: Used to transform the response into the desired value.
-    public init(makeRequest: @escaping () throws -> URLRequest,
-                transform: @escaping (Response) throws -> Value) {
-        self.makeRequest = makeRequest
-        self.transform = transform
+    ///   - request: Creates a request for this resource.
+    ///   - success: Used to transform the response into the desired value.
+    public init(
+        request: @escaping () throws -> URLRequest,
+        success: @escaping (Response) throws -> Value
+    ) {
+        _request = request
+        _success = success
+    }
+}
+
+extension Resource {
+
+    /// Creates a resource located with the request and transformed from data
+    /// using the given transform.
+    ///
+    /// - Parameters:
+    ///   - request: A request for this resource.
+    ///   - success: Used to transform the response into the desired value.
+    public init(
+        request: URLRequest,
+        success: @escaping (Response) throws -> Value
+    ) {
+        self.init(request: { request }, success: success)
+    }
+}
+
+extension Resource {
+
+    /// A request used to fetch the data.
+    public var request: URLRequest {
+        get throws { try _request() }
+    }
+
+    /// Transforms the network response into the desired value.
+    public func value(for response: Response) throws -> Value {
+        try _success(response)
     }
 }
 
@@ -61,26 +74,59 @@ extension Resource {
         _ transform: @escaping (Value) throws -> NewValue
     ) -> Resource<NewValue> {
 
-        return Resource<NewValue>(makeRequest: makeRequest) { response in
-            try transform(self.transform(response))
+        Resource<NewValue>(request: _request) { response in
+            try transform(value(for: response))
         }
     }
 
     public func mapRequest(
         _ modify: @escaping (URLRequest) throws -> URLRequest
     ) -> Resource {
-        return Resource(
-            makeRequest: { try modify(self.makeRequest()) },
-            transform: transform)
+        Resource(
+            request: { try modify(self._request()) },
+            success: _success
+        )
     }
 
     public func modifyRequest(
         _ modify: @escaping (inout URLRequest) throws -> ()
     ) -> Resource {
-        return mapRequest { request in
+        mapRequest { request in
             var request = request
             try modify(&request)
             return request
         }
+    }
+}
+
+// MARK: - Deprecations
+
+extension Resource {
+
+    /// Transforms the network response into the desired value.
+    @available(*, deprecated, message: "Use value(for:) instead.")
+    public var transform: (Response) throws -> Value { _success }
+
+    /// Makes the request for the resource.
+    @available(*, deprecated, message: "Use request instead.")
+    public var makeRequest: () throws -> URLRequest { _request }
+
+    /// Creates a resource located with the request and transformed from data
+    /// using the given transform.
+    ///
+    /// Any failures from the makeRequest or transform functions will be
+    /// surfaced when performing the network request using the fetch or
+    /// publisher methods on URLSession.
+    ///
+    /// - Parameters:
+    ///   - makeRequest: Used to create a request for this resource.
+    ///   - transform: Used to transform the response into the desired value.
+    @available(*, deprecated, message: "Use init(request:success:) instead.")
+    public init(
+        makeRequest: @escaping () throws -> URLRequest,
+        transform: @escaping (Response) throws -> Value
+    ) {
+        _request = makeRequest
+        _success = transform
     }
 }
